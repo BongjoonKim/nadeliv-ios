@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 빌드 설정 BACKEND_URL 값이 들어간다 (Debug=localhost:3003, Release=api.nadeliv.com) -->
+	<key>BackendURL</key>
+	<string>$(BACKEND_URL)</string>
+	<!-- 로컬 백엔드(http://localhost) 접속 허용. 외부 도메인 HTTPS 강제는 그대로 유지된다. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

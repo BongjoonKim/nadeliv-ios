@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct NadelivApp: App {
     @State private var auth = AuthStore()
+    @State private var uploader = UploadManager()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(auth)
+                .environment(uploader)
                 .preferredColorScheme(.dark)
                 .tint(Theme.Color.accent)
         }
@@ -27,7 +29,7 @@ struct RootView: View {
             case .signedOut:
                 LoginView()
             case .signedIn(let user):
-                HomeView(user: user)
+                MainTabView(user: user)
             }
         }
         .task { await auth.restoreSession() }

@@ -1,5 +1,8 @@
 import Foundation
 
+/// 본문이 없는 응답(204 등)을 받을 때 쓰는 타입.
+struct EmptyResponse: Decodable {}
+
 /// 백엔드 HTTP 클라이언트.
 /// - 인증이 필요한 요청은 Bearer 액세스 토큰을 붙이고, 401 이면 refresh 후 한 번만 재시도한다.
 /// - 웹 프론트의 useAuthEP() 와 같은 역할.
@@ -48,6 +51,29 @@ final class APIClient {
         return try await send(request, authorized: authorized)
     }
 
+    func delete(_ path: String) async throws {
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "DELETE"
+        let _: EmptyResponse = try await send(request, authorized: true)
+    }
+
+    /// 디스크의 파일을 본문으로 올린다 (대용량 영상도 메모리에 올리지 않음).
+    /// - progress: 0...1, 메인 액터에서 호출된다.
+    func uploadFile<T: Decodable>(
+        _ path: String,
+        fileURL: URL,
+        contentType: String,
+        progress: @escaping @MainActor (Double) -> Void
+    ) async throws -> T {
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "POST"
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        let delegate = UploadProgressDelegate(onProgress: progress)
+        return try await send(request, authorized: true) { [session] request in
+            try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
+        }
+    }
+
     // MARK: - Private
 
     private func url(_ path: String, query: [URLQueryItem] = []) -> URL {
@@ -56,7 +82,12 @@ final class APIClient {
         return url
     }
 
-    private func send<T: Decodable>(_ request: URLRequest, authorized: Bool, isRetry: Bool = false) async throws -> T {
+    private func send<T: Decodable>(
+        _ request: URLRequest,
+        authorized: Bool,
+        isRetry: Bool = false,
+        perform: ((URLRequest) async throws -> (Data, URLResponse))? = nil
+    ) async throws -> T {
         var request = request
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if authorized {
@@ -67,7 +98,11 @@ final class APIClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            if let perform {
+                (data, response) = try await perform(request)
+            } else {
+                (data, response) = try await session.data(for: request)
+            }
         } catch {
             throw APIError.transport(error)
         }
@@ -76,20 +111,45 @@ final class APIClient {
 
         if status == 401, authorized, !isRetry, let refreshHandler {
             accessToken = try await refreshHandler()
-            return try await send(request, authorized: authorized, isRetry: true)
+            return try await send(request, authorized: authorized, isRetry: true, perform: perform)
         }
         if status == 401, authorized {
             throw APIError.unauthorized
         }
         guard (200..<300).contains(status) else {
             let body = try? decoder.decode(ServerErrorBody.self, from: data)
-            throw APIError.server(status: status, message: body?.message)
+            throw APIError.server(status: status, message: body?.displayMessage)
         }
 
+        if data.isEmpty, let empty = EmptyResponse() as? T {
+            return empty
+        }
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
             throw APIError.decoding(error)
         }
+    }
+}
+
+/// 업로드 진행률을 받는 작업별 delegate. URLSession 이 백그라운드 큐에서 부르므로 메인으로 넘긴다.
+private final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let onProgress: @MainActor (Double) -> Void
+
+    init(onProgress: @escaping @MainActor (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        let fraction = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
+        let callback = onProgress
+        Task { @MainActor in callback(fraction) }
     }
 }

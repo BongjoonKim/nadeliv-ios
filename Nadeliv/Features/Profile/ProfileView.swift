@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 로그인 후 첫 화면. 지금은 로그인 확인용이며, 여행·블로그 화면이 붙을 자리다.
-struct HomeView: View {
+/// 프로필 탭: 계정 정보와 로그아웃.
+struct ProfileView: View {
     @Environment(AuthStore.self) private var auth
     let user: CurrentUser
 
@@ -15,6 +15,7 @@ struct HomeView: View {
                 .padding(20)
             }
             .background(Theme.Color.bg)
+            .navigationTitle("프로필")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("로그아웃") { auth.signOut() }

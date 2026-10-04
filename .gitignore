@@ -21,3 +21,8 @@ xcuserdata/
 # 비밀값 (API 키 등은 커밋 금지)
 *.xcconfig.local
 Secrets.swift
+
+# 가짜 백엔드 샘플·업로드 파일 (setup.sh 로 생성)
+Tools/MockBackend/files/
+Tools/MockBackend/requests.log
+Tools/MockBackend/.makevideo

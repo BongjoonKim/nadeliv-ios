@@ -11,6 +11,11 @@ final class AuthStore {
     }
 
     private(set) var state: State = .restoring
+
+    var currentUser: CurrentUser? {
+        if case .signedIn(let user) = state { return user }
+        return nil
+    }
     let api: APIClient
 
     private static let refreshTokenKey = "refreshToken"
@@ -64,7 +69,18 @@ final class AuthStore {
         state = .signedIn(user)
     }
 
+    /// 진행 중인 refresh. 여러 요청이 동시에 401 을 받아도 refresh 는 한 번만 호출한다.
+    private var refreshTask: Task<String, Error>?
+
     private func refreshAccessToken() async throws -> String {
+        if let refreshTask { return try await refreshTask.value }
+        let task = Task { try await performRefresh() }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
+    }
+
+    private func performRefresh() async throws -> String {
         guard let refresh = KeychainStore.get(Self.refreshTokenKey) else {
             throw APIError.unauthorized
         }

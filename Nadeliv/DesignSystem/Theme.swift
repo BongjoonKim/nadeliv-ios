@@ -34,6 +34,18 @@ enum Theme {
         endPoint: .bottomTrailing
     )
 
+    /// 커버 사진이 없는 여행의 기본 썸네일. 웹 homeTokens.projectPalette 와 같은 순서·색.
+    static let projectPalette: [(SwiftUI.Color, SwiftUI.Color)] = [
+        (SwiftUI.Color(hex: 0x7A9A7E), SwiftUI.Color(hex: 0x3F5A45)), // sage
+        (SwiftUI.Color(hex: 0x5F9097), SwiftUI.Color(hex: 0x2F5A60)), // teal
+        (SwiftUI.Color(hex: 0x6F86AD), SwiftUI.Color(hex: 0x3B4D6E)), // dusty blue
+        (SwiftUI.Color(hex: 0x8F78A3), SwiftUI.Color(hex: 0x54436A)), // plum
+        (SwiftUI.Color(hex: 0xB07A86), SwiftUI.Color(hex: 0x6E4450)), // rose
+        (SwiftUI.Color(hex: 0xBB7F5F), SwiftUI.Color(hex: 0x74472F)), // terracotta
+        (SwiftUI.Color(hex: 0xC29D5E), SwiftUI.Color(hex: 0x7A5C2C)), // ochre
+        (SwiftUI.Color(hex: 0x93965C), SwiftUI.Color(hex: 0x575A2F)), // olive
+    ]
+
     enum Radius {
         static let md: CGFloat = 10
         static let lg: CGFloat = 14

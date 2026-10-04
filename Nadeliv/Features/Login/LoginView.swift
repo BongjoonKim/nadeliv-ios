@@ -43,7 +43,7 @@ struct LoginView: View {
                 .font(.caption.weight(.semibold))
                 .tracking(3)
                 .foregroundStyle(Theme.Color.accent)
-            Text("Korea, beyond Seoul.")
+            Text("Find, plan, and keep every journey.")
                 .font(Theme.Font.serif(34))
                 .foregroundStyle(Theme.Color.text)
             Text("나들이브 계정으로 로그인하세요.")

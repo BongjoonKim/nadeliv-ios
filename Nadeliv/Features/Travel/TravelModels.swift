@@ -68,6 +68,8 @@ struct TravelMedia: Decodable, Identifiable, Hashable {
     let originalFileName: String?
     let fileUrl: String?
     let thumbnailUrl: String?
+    /// 중간 크기(2048px) JPEG — 뷰어용. 3단계 이후 업로드분에만 있고, 영상은 없다.
+    let displayUrl: String?
     let mimeType: String?
     let fileSize: Int64?
     let width: Int?
@@ -84,6 +86,10 @@ struct TravelMedia: Decodable, Identifiable, Hashable {
 
     var originalURL: URL? { fileUrl.flatMap(URL.init(string:)) }
     var thumbURL: URL? { thumbnailUrl.flatMap(URL.init(string:)) }
+    var displayURL: URL? { displayUrl.flatMap(URL.init(string:)) }
+
+    /// 뷰어에서 큰 그림으로 시도할 URL 순서: display(빠르고 작음) → 원본. display 객체가 아직 없으면 원본으로.
+    var viewerImageURLs: [URL] { [displayURL, originalURL].compactMap { $0 } }
 
     /// 그리드 셀에서 시도할 URL 순서. 영상 원본은 이미지로 디코딩할 수 없으니 썸네일만.
     var gridImageURLs: [URL] {

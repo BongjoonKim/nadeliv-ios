@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// 업로드할 파일과 메타데이터. TravelMediaRequest 로 서버에 같이 보낸다.
+/// 업로드할 파일과 메타데이터. init 요청(MediaUploadInitRequest)에 같이 보낸다.
 nonisolated struct PreparedUpload {
     let fileURL: URL
     let fileName: String
@@ -113,43 +113,5 @@ enum UploadPreparer {
             return String(name.dropFirst(37))
         }
         return name
-    }
-}
-
-/// multipart/form-data 본문을 디스크에 만든다. 대용량 영상도 메모리에 올리지 않는다.
-enum MultipartBuilder {
-    nonisolated struct Request: Encodable {
-        let width: Int?
-        let height: Int?
-        let duration: Int?
-        let takenAt: String?
-    }
-
-    nonisolated static func build(_ upload: PreparedUpload, boundary: String) throws -> URL {
-        let output = upload.fileURL.deletingLastPathComponent()
-            .appending(path: "\(UUID().uuidString).multipart")
-        FileManager.default.createFile(atPath: output.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: output)
-        defer { try? handle.close() }
-
-        let safeName = upload.fileName.replacingOccurrences(of: "\"", with: "")
-        try handle.write(contentsOf: Data(
-            "--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(upload.mimeType)\r\n\r\n".utf8
-        ))
-        let reader = try FileHandle(forReadingFrom: upload.fileURL)
-        defer { try? reader.close() }
-        while let chunk = try reader.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty {
-            try handle.write(contentsOf: chunk)
-        }
-
-        let json = try JSONEncoder().encode(Request(
-            width: upload.width, height: upload.height, duration: upload.duration, takenAt: upload.takenAt
-        ))
-        try handle.write(contentsOf: Data(
-            "\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"request\"\r\nContent-Type: application/json\r\n\r\n".utf8
-        ))
-        try handle.write(contentsOf: json)
-        try handle.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
-        return output
     }
 }

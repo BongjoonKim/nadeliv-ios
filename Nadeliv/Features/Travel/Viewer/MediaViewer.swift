@@ -185,11 +185,14 @@ private struct PhotoPage: View {
             if let thumb = media.thumbURL {
                 image = await ImageLoader.shared.image(for: thumb, maxPixel: 600)
             }
-            guard let original = media.originalURL else { return }
             let screen = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
             // 확대해도 선명하도록 화면의 약 2배까지 디코딩한다.
-            if let full = await ImageLoader.shared.image(for: original, maxPixel: screen * 2) {
-                image = full
+            // display(2048px JPEG) 를 먼저, 없으면(옛 업로드) 원본을 받는다.
+            for url in media.viewerImageURLs {
+                if let full = await ImageLoader.shared.image(for: url, maxPixel: screen * 2) {
+                    image = full
+                    break
+                }
             }
             isFullLoaded = true
         }

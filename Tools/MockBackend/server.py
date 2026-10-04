@@ -3,6 +3,12 @@
 로컬 백엔드는 원격(운영) MongoDB 에 붙어 있어 테스트 계정·업로드를 만들 수 없다.
 이 서버로 로그인·여행 목록·앨범·업로드·삭제·토큰 만료(401→refresh) 흐름을 검증한다.
 
+업로드는 백엔드 3단계 presigned 방식과 같은 API 를 흉내 낸다:
+  POST .../media/uploads → SINGLE(≤256KB) 또는 MULTIPART(128KB part) URL 발급 (실제 백엔드는 64MB/16MB)
+  PUT  /s3/{uploadId}/{partNumber}?v=N → part 저장 (MOCK_EXPIRE_FIRST=1 이면 v=1 URL 은 403 → 재발급 흐름 검증)
+                                           (MOCK_SLOW_PUT=초 이면 part 마다 그만큼 지연 → 앱 종료·재실행 복구 검증)
+  POST .../uploads/{id}/parts, .../complete, DELETE .../uploads/{id}
+
   ./setup.sh                     # 샘플 파일 생성 (최초 1회)
   python3 server.py 3999         # 실행
   xcodebuild ... BACKEND_URL=http://localhost:3999 build
@@ -10,8 +16,6 @@
 테스트 계정: mockuser / mock-pass (서버 재시작 시 기존 액세스 토큰은 만료 처리됨)
 """
 import json, os, re, sys, uuid
-from email.parser import BytesParser
-from email.policy import default as email_policy
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -55,11 +59,13 @@ def seed():
             "fileUrl": f"{HOST}/files/p{i}.jpg",
             # m5 는 썸네일이 아직 없는 상태(Lambda 지연)를 흉내 낸다 → 원본 폴백 확인용
             "thumbnailUrl": f"{HOST}/files/p{i}-thumb.jpg" if i != 5 else f"{HOST}/files/missing-thumb.jpg",
+            # 3단계 이후 업로드분에만 display(2048px JPEG) 가 있다. 홀수는 있음, 짝수는 없음(원본 폴백 확인용)
+            "displayUrl": f"{HOST}/files/p{i}.jpg" if i % 2 else None,
             "mimeType": "image/jpeg", "fileSize": os.path.getsize(os.path.join(FILES, f"p{i}.jpg")),
             "width": 2400, "height": 2400, "duration": None,
             "takenAt": f"2026-09-2{i % 4}T1{i % 10}:0{i % 6}:00", "created": f"2026-09-24T09:{i:02d}:00.5"})
     items.append({"id": "v1", "travelId": "t-jeju-001", "uploadUserId": ME, "originalFileName": "IMG_5001.MP4",
-        "fileUrl": f"{HOST}/files/v1.mp4", "thumbnailUrl": f"{HOST}/files/v1-thumb.jpg", "mimeType": "video/mp4",
+        "fileUrl": f"{HOST}/files/v1.mp4", "thumbnailUrl": f"{HOST}/files/v1-thumb.jpg", "displayUrl": None, "mimeType": "video/mp4",
         "fileSize": os.path.getsize(os.path.join(FILES, "v1.mp4")), "width": 1920, "height": 1080, "duration": 75,
         "takenAt": "2026-09-22T17:30:00", "created": "2026-09-24T10:00:00"})
     MEDIA["t-jeju-001"] = items
@@ -75,6 +81,33 @@ def issue():
     t = f"access-{COUNTER[0]}"; VALID.add(t); return t
 
 def is_video(m): return (m.get("mimeType") or "").startswith("video/")
+
+# presigned 업로드 세션 (uploadId → dict). 실제보다 작은 기준으로 멀티파트를 자주 타게 한다
+UPLOADS = {}
+MULTIPART_THRESHOLD = 256 * 1024
+PART_SIZE = 128 * 1024
+EXPIRE_FIRST = os.environ.get("MOCK_EXPIRE_FIRST") == "1"
+# part 하나 받는 데 N초 걸리게 해서, 업로드 도중 앱을 종료하고 재실행하는 복구 흐름을 검증한다
+SLOW_PUT = float(os.environ.get("MOCK_SLOW_PUT") or 0)
+PARTS_DIR = os.path.join(FILES, "parts")
+os.makedirs(PARTS_DIR, exist_ok=True)
+
+def my_role(travel_id):
+    return next((x["role"] for t in TRAVELS if t["id"] == travel_id for x in t["members"] if x["userId"] == ME), None)
+
+def part_urls(up, numbers=None):
+    v = up["urlVersion"]
+    out = []
+    for n in range(1, up["partCount"] + 1):
+        if numbers and n not in numbers: continue
+        size = min(up["partSize"], up["fileSize"] - (n - 1) * up["partSize"])
+        out.append({"partNumber": n, "size": size, "url": f"{HOST}/s3/{up['id']}/{n}?v={v}"})
+    return out
+
+def upload_response(up, numbers=None):
+    return {"uploadId": up["id"], "method": up["method"], "contentType": up["contentType"],
+            "partSize": up["partSize"], "partCount": up["partCount"], "parts": part_urls(up, numbers),
+            "urlExpiresAt": "2026-10-05T00:00:00", "sessionExpiresAt": "2026-10-06T00:00:00"}
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): log(f"{self.command} {self.path} -> {args[1] if len(args) > 1 else ''}")
@@ -136,38 +169,112 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             log(f"refresh with {body.get('refreshToken')}")
             return self.send_json(200, {"accessToken": issue(), "refreshToken": "refresh-2"})
-        m = re.match(r"^/api/v1/travels/([^/]+)/media$", u.path)
+        m = re.match(r"^/api/v1/travels/([^/]+)/media/uploads$", u.path)
         if m:
             if not self.authed(): return
             travel_id = m.group(1)
-            role = next((x["role"] for t in TRAVELS if t["id"] == travel_id for x in t["members"] if x["userId"] == ME), None)
-            if role in (None, "VIEWER"):
-                self.rfile.read(length); return self.send_json(403, {"status": "FORBIDDEN", "msg": "여행 편집 권한이 없습니다", "code": "TRV_003"})
-            raw = self.rfile.read(length)
-            msg = BytesParser(policy=email_policy).parsebytes(
-                b"Content-Type: " + self.headers["Content-Type"].encode() + b"\r\n\r\n" + raw)
-            parts = {p.get_param("name", header="content-disposition"): p for p in msg.iter_parts()}
-            fpart = parts["file"]
-            class F: pass
-            f = F(); f.filename = fpart.get_filename(); f.type = fpart.get_content_type()
-            data = fpart.get_payload(decode=True)
-            req = json.loads(parts["request"].get_payload(decode=True)) if "request" in parts else {}
-            log(f"request part content-type={parts['request'].get_content_type() if 'request' in parts else None}")
-            ext = os.path.splitext(f.filename)[1].lower() or ".bin"
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if my_role(travel_id) in (None, "VIEWER"):
+                return self.send_json(403, {"status": "FORBIDDEN", "msg": "여행 편집 권한이 없습니다", "code": "TRV_003"})
+            size = int(body.get("fileSize") or 0)
+            if size <= 0 or size > 5 * 1024 ** 3:
+                return self.send_json(400, {"msg": "파일 크기는 최대 5GB 입니다", "code": "TRV_018"})
+            up = {"id": f"u-{uuid.uuid4().hex[:10]}", "travelId": travel_id, "fileSize": size,
+                  "contentType": (body.get("contentType") or "application/octet-stream").split(";")[0],
+                  "request": body, "status": "PENDING", "urlVersion": 1, "media": None}
+            if size > MULTIPART_THRESHOLD:
+                up["method"] = "MULTIPART"; up["partSize"] = PART_SIZE
+                up["partCount"] = (size + PART_SIZE - 1) // PART_SIZE
+            else:
+                up["method"] = "SINGLE"; up["partSize"] = size; up["partCount"] = 1
+            UPLOADS[up["id"]] = up
+            log(f"UPLOAD INIT {up['id']} {up['method']} size={size} parts={up['partCount']} request={body}")
+            return self.send_json(200, upload_response(up))
+        m = re.match(r"^/api/v1/travels/([^/]+)/media/uploads/([^/]+)/(parts|complete)$", u.path)
+        if m:
+            if not self.authed(): return
+            up = UPLOADS.get(m.group(2))
+            if not up or up["travelId"] != m.group(1):
+                self.rfile.read(length)
+                return self.send_json(404, {"msg": "업로드 세션을 찾을 수 없거나 만료되었습니다", "code": "TRV_019"})
+            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+            if m.group(3) == "parts":
+                up["urlVersion"] += 1
+                log(f"UPLOAD PARTS REFRESH {up['id']} numbers={body.get('partNumbers')} v={up['urlVersion']}")
+                return self.send_json(200, upload_response(up, body.get("partNumbers") or None))
+            # complete — 멱등: 이미 끝났으면 같은 미디어
+            if up["media"]: return self.send_json(200, up["media"])
+            have = [n for n in range(1, up["partCount"] + 1) if os.path.exists(os.path.join(PARTS_DIR, f"{up['id']}-{n}"))]
+            if len(have) != up["partCount"]:
+                log(f"UPLOAD COMPLETE {up['id']} incomplete {len(have)}/{up['partCount']}")
+                return self.send_json(409, {"msg": "파일 업로드가 아직 끝나지 않았습니다", "code": "TRV_020"})
+            req = up["request"]
+            ext = os.path.splitext(req.get("fileName") or "")[1].lower() or ".bin"
             name = f"up-{uuid.uuid4().hex[:8]}{ext}"
-            with open(os.path.join(FILES, name), "wb") as out: out.write(data)
-            log(f"UPLOAD filename={f.filename} type={f.type} bytes={len(data)} head={data[:4].hex()} request={req}")
-            media = {"id": name, "travelId": travel_id, "uploadUserId": ME, "originalFileName": f.filename,
-                     "fileUrl": f"{HOST}/files/{name}", "thumbnailUrl": f"{HOST}/files/missing-thumb.jpg",
-                     "mimeType": f.type, "fileSize": len(data), "width": req.get("width"), "height": req.get("height"),
+            total = 0
+            with open(os.path.join(FILES, name), "wb") as out:
+                for n in range(1, up["partCount"] + 1):
+                    pp = os.path.join(PARTS_DIR, f"{up['id']}-{n}")
+                    with open(pp, "rb") as f: data = f.read(); out.write(data); total += len(data)
+                    os.remove(pp)
+            if total != up["fileSize"]:
+                os.remove(os.path.join(FILES, name))
+                return self.send_json(400, {"msg": "업로드된 파일 크기가 요청과 다릅니다", "code": "TRV_021"})
+            with open(os.path.join(FILES, name), "rb") as f: head = f.read(4).hex()
+            log(f"UPLOAD COMPLETE {up['id']} -> {name} bytes={total} head={head} type={up['contentType']}")
+            media = {"id": name, "travelId": up["travelId"], "uploadUserId": ME, "originalFileName": req.get("fileName"),
+                     "fileUrl": f"{HOST}/files/{name}", "thumbnailUrl": f"{HOST}/files/missing-thumb.jpg", "displayUrl": None,
+                     "mimeType": up["contentType"], "fileSize": total, "width": req.get("width"), "height": req.get("height"),
                      "duration": req.get("duration"), "takenAt": req.get("takenAt"), "created": "2026-10-04T15:00:00.1"}
-            MEDIA.setdefault(travel_id, []).append(media)
+            up["media"] = media; up["status"] = "COMPLETED"
+            MEDIA.setdefault(up["travelId"], []).append(media)
             return self.send_json(200, media)
         self.send_json(404, {"error": "Not Found"})
 
+    def do_PUT(self):
+        u = urlparse(self.path)
+        m = re.match(r"^/s3/([^/]+)/(\d+)$", u.path)
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if not m:
+            self.rfile.read(length); return self.send_json(404, {"error": "Not Found"})
+        up = UPLOADS.get(m.group(1)); n = int(m.group(2))
+        v = int(parse_qs(u.query).get("v", ["1"])[0])
+        if not up or n < 1 or n > up["partCount"]:
+            self.rfile.read(length); return self.send_json(404, {"error": "NoSuchUpload"})
+        if EXPIRE_FIRST and v < 2:
+            # presigned URL 만료 흉내 — 앱이 /parts 로 재발급받아 다시 올려야 한다
+            self.rfile.read(length)
+            log(f"S3 PUT {up['id']}/{n} v={v} -> 403 (expired)")
+            return self.send_json(403, {"error": "Request has expired"})
+        expected = min(up["partSize"], up["fileSize"] - (n - 1) * up["partSize"])
+        if length != expected:
+            self.rfile.read(length)
+            log(f"S3 PUT {up['id']}/{n} size mismatch {length} != {expected} -> 403")
+            return self.send_json(403, {"error": "SignatureDoesNotMatch (content-length)"})
+        ctype = self.headers.get("Content-Type")
+        if SLOW_PUT: import time; time.sleep(SLOW_PUT)
+        with open(os.path.join(PARTS_DIR, f"{up['id']}-{n}"), "wb") as out:
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(1 << 20, remaining))
+                if not chunk: break
+                out.write(chunk); remaining -= len(chunk)
+        log(f"S3 PUT {up['id']}/{n} bytes={length} content-type={ctype}")
+        self.send_json(200, None, {"ETag": f'"{uuid.uuid4().hex}"'})
+
     def do_DELETE(self):
         if not self.authed(): return
-        m = re.match(r"^/api/v1/travels/([^/]+)/media/([^/]+)$", urlparse(self.path).path)
+        path = urlparse(self.path).path
+        m = re.match(r"^/api/v1/travels/([^/]+)/media/uploads/([^/]+)$", path)
+        if m:
+            up = UPLOADS.pop(m.group(2), None)
+            if up:
+                for n in range(1, up["partCount"] + 1):
+                    try: os.remove(os.path.join(PARTS_DIR, f"{up['id']}-{n}"))
+                    except FileNotFoundError: pass
+                log(f"UPLOAD ABORT {up['id']}")
+            return self.send_json(204)
+        m = re.match(r"^/api/v1/travels/([^/]+)/media/([^/]+)$", path)
         if not m: return self.send_json(404, {})
         items = MEDIA.get(m.group(1), [])
         item = next((x for x in items if x["id"] == m.group(2)), None)

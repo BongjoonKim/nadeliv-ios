@@ -34,18 +34,30 @@ extension APIClient {
         try await delete("api/v1/travels/\(travelId)/media/\(mediaId)")
     }
 
-    /// 기존 multipart 업로드 (POST /media). 백엔드 presigned 업로드가 배포되면 교체한다.
-    func uploadMedia(
-        travelId: String,
-        multipartFile: URL,
-        boundary: String,
-        progress: @escaping @MainActor (Double) -> Void
-    ) async throws -> TravelMedia {
-        try await uploadFile(
-            "api/v1/travels/\(travelId)/media",
-            fileURL: multipartFile,
-            contentType: "multipart/form-data; boundary=\(boundary)",
-            progress: progress
+    // MARK: - presigned 직접 업로드 (백엔드 /media/uploads, 웹과 공용)
+
+    /// 업로드 시작. 64MB 초과면 MULTIPART 로 part URL 들이 온다.
+    func initMediaUpload(travelId: String, request: MediaUploadInitRequest) async throws -> MediaUploadInitResponse {
+        try await postJSON("api/v1/travels/\(travelId)/media/uploads", body: request)
+    }
+
+    /// 만료된(403) part URL 재발급
+    func refreshUploadParts(travelId: String, uploadId: String, partNumbers: [Int]) async throws -> MediaUploadInitResponse {
+        try await postJSON(
+            "api/v1/travels/\(travelId)/media/uploads/\(uploadId)/parts",
+            body: MediaUploadPartsRequest(partNumbers: partNumbers)
         )
     }
+
+    /// 모든 part 가 올라간 뒤 호출. 서버가 S3 를 확인하고 TravelMedia 를 만든다 (재호출해도 같은 미디어).
+    func completeMediaUpload(travelId: String, uploadId: String) async throws -> TravelMedia {
+        try await postJSON("api/v1/travels/\(travelId)/media/uploads/\(uploadId)/complete", body: EmptyBody())
+    }
+
+    func abortMediaUpload(travelId: String, uploadId: String) async throws {
+        try await delete("api/v1/travels/\(travelId)/media/uploads/\(uploadId)")
+    }
 }
+
+/// 본문 없는 POST 용 (서버는 @RequestBody 를 받지 않는다)
+nonisolated struct EmptyBody: Encodable {}

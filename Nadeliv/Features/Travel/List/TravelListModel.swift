@@ -22,6 +22,21 @@ final class TravelListModel {
         await loadPage(api: api, replacing: false)
     }
 
+    // MARK: - 만들기·수정·삭제 반영 (다시 불러오지 않고 목록만 고친다)
+
+    func didCreate(_ travel: Travel) {
+        travels.insert(travel, at: 0)
+    }
+
+    func didUpdate(_ travel: Travel) {
+        guard let index = travels.firstIndex(where: { $0.id == travel.id }) else { return }
+        travels[index] = travel
+    }
+
+    func didDelete(id: String) {
+        travels.removeAll { $0.id == id }
+    }
+
     private func loadPage(api: APIClient, replacing: Bool) async {
         guard !isLoading else { return }
         isLoading = true

@@ -5,7 +5,7 @@ import Observation
 /// 웹 useTravelAlbumPage 와 같은 동작을 목표로 한다.
 @Observable
 final class AlbumModel {
-    let travel: Travel
+    private(set) var travel: Travel
     let currentUserId: String?
 
     private(set) var items: [TravelMedia] = []
@@ -32,11 +32,18 @@ final class AlbumModel {
         self.currentUserId = currentUserId
     }
 
+    /// 여행 설정에서 저장한 값 반영 (제목·날짜·커버 등)
+    func didUpdateTravel(_ travel: Travel) {
+        self.travel = travel
+    }
+
     // MARK: - 권한 (서버도 같은 규칙으로 검사한다)
 
     var role: TravelRole? { travel.role(of: currentUserId) }
     /// 업로드: 멤버이면서 VIEWER 가 아닐 때
     var canEdit: Bool { role != nil && role != .viewer }
+    /// 여행 설정(수정·삭제): ADMIN 만
+    var canManageTravel: Bool { role == .admin }
 
     /// 삭제: 본인이 올렸거나 ADMIN
     func canDelete(_ media: TravelMedia) -> Bool {

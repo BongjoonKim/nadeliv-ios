@@ -5,9 +5,16 @@ import SwiftUI
 struct AlbumView: View {
     @Environment(AuthStore.self) private var auth
     let travel: Travel
+    var onTravelChanged: (Travel) -> Void = { _ in }
+    var onTravelDeleted: (String) -> Void = { _ in }
 
     var body: some View {
-        AlbumContent(travel: travel, currentUserId: auth.currentUser?.userId)
+        AlbumContent(
+            travel: travel,
+            currentUserId: auth.currentUser?.userId,
+            onTravelChanged: onTravelChanged,
+            onTravelDeleted: onTravelDeleted
+        )
     }
 }
 
@@ -23,9 +30,22 @@ private struct AlbumContent: View {
     @State private var isSaving = false
     /// uploader.uploaded 중 이미 목록에 반영한 개수. nil = 화면에 처음 들어온 상태.
     @State private var appliedUploads: Int?
+    @State private var isEditingTravel = false
+    /// 설정에서 삭제한 여행 id. 시트가 다 닫힌 뒤 목록에 알린다 (시트가 떠 있는 채로 화면을 빼면 전환이 꼬인다).
+    @State private var deletedTravelId: String?
 
-    init(travel: Travel, currentUserId: String?) {
+    private let onTravelChanged: (Travel) -> Void
+    private let onTravelDeleted: (String) -> Void
+
+    init(
+        travel: Travel,
+        currentUserId: String?,
+        onTravelChanged: @escaping (Travel) -> Void,
+        onTravelDeleted: @escaping (String) -> Void
+    ) {
         _model = State(initialValue: AlbumModel(travel: travel, currentUserId: currentUserId))
+        self.onTravelChanged = onTravelChanged
+        self.onTravelDeleted = onTravelDeleted
     }
 
     private var travelId: String { model.travel.id }
@@ -65,6 +85,19 @@ private struct AlbumContent: View {
             for media in all.dropFirst(applied) { model.didUpload(media) }
             appliedUploads = count
         }
+        .sheet(isPresented: $isEditingTravel, onDismiss: {
+            // 목록에서 이 여행을 빼고 앨범 화면을 닫는다 (TravelListView 가 path 에서 제거).
+            if let id = deletedTravelId { onTravelDeleted(id) }
+        }) {
+            TravelFormView(
+                mode: .edit(model.travel),
+                onSaved: { result in
+                    model.didUpdateTravel(result.travel)
+                    onTravelChanged(result.travel)
+                },
+                onDeleted: { deletedTravelId = $0 }
+            )
+        }
         .fullScreenCover(item: $viewerStart) { start in
             MediaViewer(model: model, startId: start.id)
         }
@@ -85,6 +118,10 @@ private struct AlbumContent: View {
             HStack(spacing: 10) {
                 if let dates = model.travel.dateRangeText {
                     Label(dates, systemImage: "calendar")
+                }
+                if let destination = model.travel.destination, !destination.isEmpty {
+                    Label(destination, systemImage: "mappin.and.ellipse")
+                        .lineLimit(1)
                 }
                 if let total = model.counts[.all] {
                     Label("\(total)개", systemImage: "photo.on.rectangle")
@@ -217,6 +254,13 @@ private struct AlbumContent: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("선택") { model.toggleSelecting() }
                     .disabled(model.items.isEmpty)
+            }
+            if model.canManageTravel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { isEditingTravel = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("여행 설정")
+                        .accessibilityIdentifier("album.travelSettings")
+                }
             }
             if model.canEdit {
                 ToolbarItem(placement: .topBarTrailing) {

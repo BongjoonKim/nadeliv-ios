@@ -1,21 +1,62 @@
 import SwiftUI
 
-/// 여행 탭 첫 화면: 내 여행 목록. 여행을 누르면 앨범으로 바로 들어간다.
+/// 여행 탭 첫 화면: 내 여행 목록. 여행을 누르면 앨범으로 바로 들어간다. + 로 새 여행을 만든다.
 struct TravelListView: View {
     @Environment(AuthStore.self) private var auth
     @State private var model = TravelListModel()
+    @State private var path: [Travel] = []
+    @State private var isCreating = false
+    /// 만들기 시트가 닫힌 뒤 들어갈 새 여행 (시트가 닫히는 중에 push 하면 애니메이션이 꼬인다)
+    @State private var createdTravel: Travel?
+    @State private var alertMessage: String?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .background(Theme.Color.bg)
                 .navigationTitle("여행")
                 .toolbarBackground(Theme.Color.bg, for: .navigationBar)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { isCreating = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("새 여행 만들기")
+                            .accessibilityIdentifier("travelList.create")
+                    }
+                }
                 .navigationDestination(for: Travel.self) { travel in
-                    AlbumView(travel: travel)
+                    AlbumView(
+                        travel: travel,
+                        onTravelChanged: { model.didUpdate($0) },
+                        onTravelDeleted: { id in
+                            model.didDelete(id: id)
+                            path.removeAll { $0.id == id }
+                        }
+                    )
                 }
         }
         .task { if model.travels.isEmpty { await model.reload(api: auth.api) } }
+        .sheet(isPresented: $isCreating, onDismiss: openCreatedTravel) {
+            TravelFormView(mode: .create) { result in
+                model.didCreate(result.travel)
+                // 커버만 실패한 경우엔 목록에 남아 경고를 보여준다 (알림과 화면 전환을 동시에 하면 전환이 무시된다).
+                if let warning = result.warning {
+                    alertMessage = warning
+                } else {
+                    createdTravel = result.travel
+                }
+            }
+        }
+        .alert("알림", isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })) {
+            Button("확인", role: .cancel) {}
+        } message: {
+            Text(alertMessage ?? "")
+        }
+    }
+
+    private func openCreatedTravel() {
+        guard let travel = createdTravel else { return }
+        createdTravel = nil
+        path.append(travel)
     }
 
     @ViewBuilder
@@ -49,9 +90,14 @@ struct TravelListView: View {
                 Label(model.errorMessage == nil ? "아직 여행이 없어요" : "불러오지 못했어요",
                       systemImage: model.errorMessage == nil ? "suitcase" : "wifi.exclamationmark")
             } description: {
-                Text(model.errorMessage ?? "웹에서 여행 프로젝트를 만들면 여기에 나타납니다.")
+                Text(model.errorMessage ?? "첫 여행을 만들고 사진과 영상을 모아 보세요.")
             } actions: {
-                Button("다시 시도") { Task { await model.reload(api: auth.api) } }
+                if model.errorMessage == nil {
+                    Button("여행 만들기") { isCreating = true }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("다시 시도") { Task { await model.reload(api: auth.api) } }
+                }
             }
             .foregroundStyle(Theme.Color.textSoft)
         }

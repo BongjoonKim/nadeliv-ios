@@ -3,10 +3,19 @@ import Foundation
 /// 본문이 없는 응답(204 등)을 받을 때 쓰는 타입.
 struct EmptyResponse: Decodable {}
 
+/// postMultipart 로 보낼 파일
+struct MultipartFile {
+    let fieldName: String
+    let fileName: String
+    let mimeType: String
+    let data: Data
+}
+
 /// 백엔드 HTTP 클라이언트.
 /// - 인증이 필요한 요청은 Bearer 액세스 토큰을 붙이고, 401 이면 refresh 후 한 번만 재시도한다.
 /// - 웹 프론트의 useAuthEP() 와 같은 역할.
-/// - 파일 전송은 여기서 하지 않는다. 여행 미디어는 presigned URL 로 S3 에 직접 올린다 (BackgroundUploadSession).
+/// - 큰 파일은 여기서 보내지 않는다. 여행 미디어는 presigned URL 로 S3 에 직접 올린다 (BackgroundUploadSession).
+///   여기서 보내는 파일은 커버 사진처럼 줄여서 수백 KB 인 것만 (postMultipart).
 final class APIClient {
     private let baseURL: URL
     private let session: URLSession
@@ -37,6 +46,34 @@ final class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
         return try await send(request, authorized: authorized)
+    }
+
+    func putJSON<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        return try await send(request, authorized: true)
+    }
+
+    /// multipart/form-data POST (파일 1개 + 텍스트 필드). 백엔드 /api/v1/files 가 이 형식을 받는다.
+    func postMultipart<T: Decodable>(_ path: String, fields: [String: String], file: MultipartFile) async throws -> T {
+        let boundary = "nadeliv-\(UUID().uuidString)"
+        var body = Data()
+        func append(_ text: String) { body.append(Data(text.utf8)) }
+        for (name, value) in fields {
+            append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n")
+        }
+        append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(file.fieldName)\"; filename=\"\(file.fileName)\"\r\n")
+        append("Content-Type: \(file.mimeType)\r\n\r\n")
+        body.append(file.data)
+        append("\r\n--\(boundary)--\r\n")
+
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return try await send(request, authorized: true)
     }
 
     /// application/x-www-form-urlencoded POST. 로그인(/ps/login)이 이 형식만 받는다.

@@ -9,6 +9,10 @@
                                            (MOCK_SLOW_PUT=초 이면 part 마다 그만큼 지연 → 앱 종료·재실행 복구 검증)
   POST .../uploads/{id}/parts, .../complete, DELETE .../uploads/{id}
 
+여행 만들기·수정·삭제: POST /api/v1/travels, PUT·DELETE /api/v1/travels/{id} (수정·삭제는 ADMIN 만)
+커버 사진: POST /api/v1/files (multipart file + fileKey) → files/ 에 저장하고 공개 URL 반환
+  (MOCK_FAIL_FILES=1 이면 400 → 만들기에서 "커버만 실패" 경고 흐름 검증)
+
   ./setup.sh                     # 샘플 파일 생성 (최초 1회)
   python3 server.py 3999         # 실행
   xcodebuild ... BACKEND_URL=http://localhost:3999 build
@@ -16,6 +20,8 @@
 테스트 계정: mockuser / mock-pass (서버 재시작 시 기존 액세스 토큰은 만료 처리됨)
 """
 import json, os, re, sys, uuid
+from email.parser import BytesParser
+from email.policy import HTTP
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -91,6 +97,21 @@ EXPIRE_FIRST = os.environ.get("MOCK_EXPIRE_FIRST") == "1"
 SLOW_PUT = float(os.environ.get("MOCK_SLOW_PUT") or 0)
 PARTS_DIR = os.path.join(FILES, "parts")
 os.makedirs(PARTS_DIR, exist_ok=True)
+
+FAIL_FILES = os.environ.get("MOCK_FAIL_FILES") == "1"
+SAFE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+def find_travel(travel_id):
+    return next((t for t in TRAVELS if t["id"] == travel_id), None)
+
+def apply_travel_fields(t, body):
+    """백엔드 updateTravel 과 같이 null(없는 키)은 그대로 둔다."""
+    for k in ("title", "description", "coverImageUrl", "visibility", "status", "startDate", "endDate", "destination", "tags"):
+        if body.get(k) is not None: t[k] = body[k]
+    if t.get("coverImageUrl") == "": t["coverImageUrl"] = None
+    if t.get("startDate") and t.get("endDate") and t["startDate"] > t["endDate"]:
+        return False
+    return True
 
 def my_role(travel_id):
     return next((x["role"] for t in TRAVELS if t["id"] == travel_id for x in t["members"] if x["userId"] == ME), None)
@@ -169,6 +190,41 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             log(f"refresh with {body.get('refreshToken')}")
             return self.send_json(200, {"accessToken": issue(), "refreshToken": "refresh-2"})
+        if u.path == "/api/v1/travels":
+            if not self.authed(): return
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not (body.get("title") or "").strip():
+                return self.send_json(400, {"msg": "여행 제목은 필수입니다", "code": "VALIDATION"})
+            tid = f"t-new-{uuid.uuid4().hex[:8]}"
+            t = {"id": tid, "visibility": "PRIVATE", "status": "PLANNING", "tags": [], "coverImageUrl": None,
+                 "members": [{"userId": ME, "role": "ADMIN", "nickname": "나", "joinedAt": "2026-10-05T10:00:00"}],
+                 "memberCount": 1, "createdUser": ME, "created": "2026-10-05T10:00:00.5"}
+            if not apply_travel_fields(t, body):
+                return self.send_json(400, {"msg": "시작일은 종료일보다 늦을 수 없습니다", "code": "TRV_DATE"})
+            TRAVELS.insert(0, t); MEDIA[tid] = []
+            log(f"TRAVEL CREATE {tid} {json.dumps(body, ensure_ascii=False)}")
+            return self.send_json(200, t)
+        if u.path == "/api/v1/files":
+            if not self.authed(): return
+            raw = self.rfile.read(length)
+            msg = BytesParser(policy=HTTP).parsebytes(
+                f"Content-Type: {self.headers.get('Content-Type')}\r\n\r\n".encode() + raw)
+            fields, file_part = {}, None
+            for part in msg.iter_parts():
+                name = part.get_param("name", header="content-disposition")
+                if part.get_filename() is not None: file_part = part
+                else: fields[name] = part.get_content().strip()
+            key = fields.get("fileKey", "")
+            ctype = file_part.get_content_type() if file_part else ""
+            data = file_part.get_payload(decode=True) if file_part else b""
+            log(f"FILE UPLOAD key={key} bytes={len(data)} content-type={ctype}")
+            if FAIL_FILES: return self.send_json(400, None)
+            if not SAFE_KEY.match(key) or ".." in key: return self.send_json(400, {"msg": "잘못된 파일 경로입니다"})
+            if not ctype.startswith("image/") and not ctype.startswith("video/"):
+                return self.send_json(400, {"msg": "지원하지 않는 파일 형식입니다"})
+            name = key.replace("/", "_")
+            with open(os.path.join(FILES, name), "wb") as f: f.write(data)
+            return self.send_json(200, {"url": f"{HOST}/files/{name}"})
         m = re.match(r"^/api/v1/travels/([^/]+)/media/uploads$", u.path)
         if m:
             if not self.authed(): return
@@ -233,8 +289,21 @@ class H(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         u = urlparse(self.path)
-        m = re.match(r"^/s3/([^/]+)/(\d+)$", u.path)
         length = int(self.headers.get("Content-Length", 0) or 0)
+        m = re.match(r"^/api/v1/travels/([^/]+)$", u.path)
+        if m:
+            if not self.authed(): return
+            body = json.loads(self.rfile.read(length) or b"{}")
+            t = find_travel(m.group(1))
+            if not t: return self.send_json(404, {"msg": "여행을 찾을 수 없습니다"})
+            if my_role(t["id"]) != "ADMIN": return self.send_json(403, {"msg": "여행 관리자만 할 수 있습니다"})
+            before = dict(t)
+            if not apply_travel_fields(t, body):
+                t.clear(); t.update(before)
+                return self.send_json(400, {"msg": "시작일은 종료일보다 늦을 수 없습니다", "code": "TRV_DATE"})
+            log(f"TRAVEL UPDATE {t['id']} {json.dumps(body, ensure_ascii=False)}")
+            return self.send_json(200, t)
+        m = re.match(r"^/s3/([^/]+)/(\d+)$", u.path)
         if not m:
             self.rfile.read(length); return self.send_json(404, {"error": "Not Found"})
         up = UPLOADS.get(m.group(1)); n = int(m.group(2))
@@ -273,6 +342,14 @@ class H(BaseHTTPRequestHandler):
                     try: os.remove(os.path.join(PARTS_DIR, f"{up['id']}-{n}"))
                     except FileNotFoundError: pass
                 log(f"UPLOAD ABORT {up['id']}")
+            return self.send_json(204)
+        m = re.match(r"^/api/v1/travels/([^/]+)$", path)
+        if m:
+            t = find_travel(m.group(1))
+            if not t: return self.send_json(404, {"msg": "여행을 찾을 수 없습니다"})
+            if my_role(t["id"]) != "ADMIN": return self.send_json(403, {"msg": "여행 관리자만 할 수 있습니다"})
+            TRAVELS.remove(t); MEDIA.pop(t["id"], None)
+            log(f"TRAVEL DELETE {t['id']}")
             return self.send_json(204)
         m = re.match(r"^/api/v1/travels/([^/]+)/media/([^/]+)$", path)
         if not m: return self.send_json(404, {})

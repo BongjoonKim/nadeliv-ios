@@ -9,14 +9,15 @@ SwiftUI 네이티브 iOS 앱. 백엔드는 웹과 공용인 nadeliv-backend 를 
 Nadeliv/
 ├── App/            # 앱 진입점(NadelivApp, RootView, MainTabView), AppConfig
 ├── Core/
-│   ├── Network/    # APIClient (Bearer 토큰, 401 → refresh 후 1회 재시도) — 파일 전송은 안 함
+│   ├── Network/    # APIClient (Bearer 토큰, 401 → refresh 후 1회 재시도) — 큰 파일은 안 보냄(커버 사진 multipart 만)
 │   ├── Auth/       # AuthStore(@Observable, refresh 단일 실행), KeychainStore, 인증 모델
 │   └── Image/      # ImageLoader(다운샘플 + 캐시), RemoteImage(후보 URL 순차 시도)
 ├── DesignSystem/   # Theme — 웹 homeTokens.ts 와 같은 다크 세이지-그린 토큰·projectPalette
 └── Features/
     ├── Travel/
     │   ├── TravelModels.swift / TravelAPI.swift   # 여행·미디어 DTO, API 함수
-    │   ├── List/     # 내 여행 목록, 커버(TravelThumb — 웹과 같은 id 해시 색)
+    │   ├── List/     # 내 여행 목록(+ 로 만들기), 커버(TravelThumb — 웹과 같은 id 해시 색)
+    │   ├── Form/     # 여행 만들기·설정(수정·삭제) 시트 (TravelFormModel/View), 커버 사진 1600px JPEG
     │   ├── Album/    # 앨범 그리드·필터·정렬·선택·삭제 (AlbumModel)
     │   ├── Viewer/   # 전체 화면 뷰어(display → 원본 순, 영상 스트리밍), 사진 앱 저장
     │   └── Upload/   # UploadManager(앱 전역 대기열·디스크 기록), BackgroundUploadSession(S3 PUT), UploadJobStore, HEIC→JPEG·메타데이터
@@ -43,6 +44,11 @@ Tools/MockBackend/  # UI 검증용 가짜 백엔드 (아래 "검증" 참고)
   - part PUT 이 403 이면 URL 만료 → 300ms 동안 모아 `/parts` 로 재발급 후 그 part 만 다시 올린다. 그 외 실패는 같은 URL 로 최대 3회 재시도. complete 실패는 "다시 시도" 에서 complete 만 다시 부른다.
   - SINGLE PUT 만 `Content-Type` 을 보낸다 (서명에 포함). 멀티파트 part 는 URLSession 기본값(octet-stream)이 붙지만 서명 대상이 아니라 무방하다.
   - HEIC 는 여전히 앱에서 JPEG 으로 바꿔 올린다 (웹은 HEIC 원본 그대로 올리고 Lambda 가 display JPEG 를 만든다).
+- **여행 만들기·설정**: 만들기 = `POST /api/v1/travels`(만든 사람이 ADMIN). 설정(수정·삭제) = ADMIN 만 (앨범 화면 톱니바퀴, 서버도 검사).
+  - 수정은 `PUT` 에 **바꾼 필드만** 보낸다. 서버는 null 을 "변경 없음"으로 봐서 지우려면 빈 문자열·빈 배열을 보낸다 (커버 빼기 = `coverImageUrl: ""`). **날짜는 지울 수 없다** → 이미 날짜가 있으면 토글을 막는다.
+  - 커버 사진은 긴 변 1600px JPEG 로 줄여 `POST /api/v1/files`(multipart, fileKey `travel/{id}/cover-{uuid}.jpg`)로 올리고 받은 URL 을 PUT. 고른 즉시가 아니라 저장할 때 올린다. 만들기는 여행을 만든 뒤 그 id 로 올린다 (커버만 실패하면 여행은 남기고 경고).
+  - 날짜는 서버 LocalDate(서울) 기준이라 DatePicker 도 서울 달력·시간대로 띄운다.
+  - dashboardItems 는 보내지 않는다 (비어 있으면 웹이 기본 구성을 쓴다).
 - **뷰어 이미지**: `TravelMedia.viewerImageURLs` = displayUrl(2048px JPEG, 3단계 이후 업로드분) → 원본. display 객체가 없으면 ImageLoader 가 nil 을 돌려줘 원본으로 넘어간다.
 
 ## 빌드·검증
@@ -62,6 +68,8 @@ xcodebuild ... BACKEND_URL=http://localhost:3999 build   # 이 빌드를 시뮬�
 ```
 
 - 테스트 계정 `mockuser` / `mock-pass`. 여행 3개(ADMIN·USER·VIEWER 역할), 사진 14장·영상 1개.
+- 여행 만들기·수정·삭제와 커버 업로드(`/api/v1/files`)도 흉내 낸다 (요청 기록 TRAVEL CREATE/UPDATE/DELETE, FILE UPLOAD). `MOCK_FAIL_FILES=1` 이면 파일 업로드가 400 → "커버만 실패" 경고 흐름 검증용.
+- 시뮬레이터 자동 입력으로 시스템 Toggle 을 켤 때는 tap 이 아니라 짧은 swipe 를 쓴다 (tap 은 반응하지 않는다).
 - 서버를 재시작하면 기존 액세스 토큰이 만료 처리돼 401 → refresh → 재시도 흐름을 확인할 수 있다.
 - 요청 기록은 `Tools/MockBackend/requests.log` (UPLOAD INIT/S3 PUT/PARTS REFRESH/COMPLETE 로 업로드 흐름이 보인다).
 - 가짜 서버는 256KB 초과면 멀티파트(128KB part) 로 응답해 작은 시뮬레이터 샘플로도 멀티파트를 탄다 (실제 백엔드는 64MB/16MB).

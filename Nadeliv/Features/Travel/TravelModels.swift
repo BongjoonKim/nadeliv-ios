@@ -15,16 +15,18 @@ struct TravelListResponse: Decodable {
     }
 }
 
-/// 백엔드 TravelResponse 중 앨범에 필요한 필드만.
+/// 백엔드 TravelResponse 중 앨범·여행 설정에 필요한 필드만.
 struct Travel: Decodable, Identifiable, Hashable {
     let id: String
     let title: String?
     let description: String?
     let coverImageUrl: String?
+    let visibility: TravelVisibility?
     let status: String?
     let startDate: String?   // "yyyy-MM-dd"
     let endDate: String?
     let destination: String?
+    let tags: [String]?
     let members: [TravelMember]?
     let memberCount: Int?
 
@@ -50,6 +52,18 @@ struct TravelMember: Decodable, Hashable {
     let userId: String?
     let role: String?
     let nickname: String?
+}
+
+nonisolated enum TravelVisibility: String, Codable, CaseIterable, Identifiable {
+    case `private` = "PRIVATE"
+    case `public` = "PUBLIC"
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .private: "비공개"
+        case .public: "공개"
+        }
+    }
 }
 
 enum TravelRole: String {
@@ -161,6 +175,11 @@ nonisolated enum TravelDate {
     static func parseDateTime(_ text: String?) -> Date? {
         guard let text, text.count >= 19 else { return nil }
         return isoDateTime.date(from: String(text.prefix(19)))
+    }
+
+    /// 여행 생성·수정 요청에 보낼 LocalDate 문자열
+    static func serverDay(_ date: Date) -> String {
+        isoDay.string(from: date)
     }
 
     /// 업로드 요청에 보낼 LocalDateTime 문자열

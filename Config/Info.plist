@@ -6,6 +6,9 @@
 	<key>BackendURL</key>
 	<string>$(BACKEND_URL)</string>
 	<!-- 로컬 백엔드(http://localhost) 접속 허용. 외부 도메인 HTTPS 강제는 그대로 유지된다. -->
+	<!-- 표준 HTTPS 외 암호화 미사용 → 수출 규정 면제. TestFlight 빌드마다 묻는 질문을 생략한다. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

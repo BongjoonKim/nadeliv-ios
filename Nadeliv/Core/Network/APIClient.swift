@@ -95,6 +95,15 @@ final class APIClient {
         let _: EmptyResponse = try await send(request, authorized: true)
     }
 
+    /// 본문이 있는 DELETE. 회원 탈퇴(비밀번호 확인)가 이 형식을 받는다.
+    func deleteJSON<Body: Encodable>(_ path: String, body: Body) async throws {
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let _: EmptyResponse = try await send(request, authorized: true)
+    }
+
     // MARK: - Private
 
     private func url(_ path: String, query: [URLQueryItem] = []) -> URL {

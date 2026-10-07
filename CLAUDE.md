@@ -21,7 +21,7 @@ Nadeliv/
     │   ├── Album/    # 앨범 그리드·필터·정렬·선택·삭제 (AlbumModel)
     │   ├── Viewer/   # 전체 화면 뷰어(display → 원본 순, 영상 스트리밍), 사진 앱 저장
     │   └── Upload/   # UploadManager(앱 전역 대기열·디스크 기록), BackgroundUploadSession(S3 PUT), UploadJobStore, HEIC→JPEG·메타데이터
-    └── Profile/      # 계정 정보·로그아웃
+    └── Profile/      # 내 정보·프로필 편집(이름·생일·사진)·비밀번호 변경·로그아웃·계정 삭제 (ProfileAPI)
 Tools/MockBackend/  # UI 검증용 가짜 백엔드 (아래 "검증" 참고)
 ```
 
@@ -49,6 +49,12 @@ Tools/MockBackend/  # UI 검증용 가짜 백엔드 (아래 "검증" 참고)
   - 커버 사진은 긴 변 1600px JPEG 로 줄여 `POST /api/v1/files`(multipart, fileKey `travel/{id}/cover-{uuid}.jpg`)로 올리고 받은 URL 을 PUT. 고른 즉시가 아니라 저장할 때 올린다. 만들기는 여행을 만든 뒤 그 id 로 올린다 (커버만 실패하면 여행은 남기고 경고).
   - 날짜는 서버 LocalDate(서울) 기준이라 DatePicker 도 서울 달력·시간대로 띄운다.
   - dashboardItems 는 보내지 않는다 (비어 있으면 웹이 기본 구성을 쓴다).
+- **계정(프로필 탭)**: `GET·PUT /api/v1/user/profile`, `PUT /api/v1/user/password`, `DELETE /api/v1/user/account`(본문 `{password}` — `APIClient.deleteJSON`).
+  - 프로필 수정도 **바꾼 필드만** 보낸다. 사진 빼기 = `src: ""`. **생일은 지울 수 없다** → 이미 있으면 토글을 막는다. 생일은 시간대 없는 LocalDateTime 이라 UTC 달력으로 다룬다 (`ProfileDate`).
+  - 프로필 사진은 긴 변 512px JPEG 로 `POST /api/v1/files`(fileKey `profile/{userId}/avatar-{uuid}.jpg`), 저장할 때 올린다. 저장 후 `AuthStore.reloadCurrentUser()` 로 `/users/me` 를 다시 읽는다.
+  - 이메일은 앱에서 바꾸지 않는다 (백엔드가 인증 없이 바꾸는 구조라서).
+  - 비밀번호 변경·탈퇴의 400 은 비밀번호 불일치(USER_004)뿐이다 → `APIError.isPasswordMismatch` 로 한국어 문구를 보여 준다.
+  - 탈퇴(App Store 5.1.1(v)): 백엔드가 개인정보(이름·이메일·생일·사진·팔로우·북마크·여행/채널 닉네임)를 지우고 비활성화한다. 글·댓글·여행은 "Deleted user" 로 남고 userId 는 유지된다. 이후 refresh(403)·기존 access 토큰 모두 거절 → 앱은 성공 즉시 `signOut()`.
 - **뷰어 이미지**: `TravelMedia.viewerImageURLs` = displayUrl(2048px JPEG, 3단계 이후 업로드분) → 원본. display 객체가 없으면 ImageLoader 가 nil 을 돌려줘 원본으로 넘어간다.
 
 ## 빌드·검증
@@ -68,6 +74,7 @@ xcodebuild ... BACKEND_URL=http://localhost:3999 build   # 이 빌드를 시뮬�
 ```
 
 - 테스트 계정 `mockuser` / `mock-pass`. 여행 3개(ADMIN·USER·VIEWER 역할), 사진 14장·영상 1개.
+- 프로필 조회·수정, 비밀번호 변경, 탈퇴도 흉내 낸다 (PROFILE UPDATE / PASSWORD CHANGE / ACCOUNT DELETE). 탈퇴하면 로그인·refresh 가 거절되니 서버를 재시작해 되돌린다 (비밀번호도 mock-pass 로 돌아감).
 - 여행 만들기·수정·삭제와 커버 업로드(`/api/v1/files`)도 흉내 낸다 (요청 기록 TRAVEL CREATE/UPDATE/DELETE, FILE UPLOAD). `MOCK_FAIL_FILES=1` 이면 파일 업로드가 400 → "커버만 실패" 경고 흐름 검증용.
 - 시뮬레이터 자동 입력으로 시스템 Toggle 을 켤 때는 tap 이 아니라 짧은 swipe 를 쓴다 (tap 은 반응하지 않는다).
 - 서버를 재시작하면 기존 액세스 토큰이 만료 처리돼 401 → refresh → 재시도 흐름을 확인할 수 있다.

@@ -62,6 +62,12 @@ final class AuthStore {
         state = .signedOut
     }
 
+    /// 프로필을 고친 뒤 화면 곳곳의 이름·사진을 새 값으로 맞춘다. 실패해도 지금 정보를 유지한다.
+    func reloadCurrentUser() async {
+        guard currentUser != nil else { return }
+        try? await loadCurrentUser()
+    }
+
     // MARK: - Private
 
     private func loadCurrentUser() async throws {

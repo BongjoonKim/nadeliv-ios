@@ -12,12 +12,14 @@
 여행 만들기·수정·삭제: POST /api/v1/travels, PUT·DELETE /api/v1/travels/{id} (수정·삭제는 ADMIN 만)
 커버 사진: POST /api/v1/files (multipart file + fileKey) → files/ 에 저장하고 공개 URL 반환
   (MOCK_FAIL_FILES=1 이면 400 → 만들기에서 "커버만 실패" 경고 흐름 검증)
+내 계정: GET·PUT /api/v1/user/profile, PUT /api/v1/user/password, DELETE /api/v1/user/account
+  (비밀번호가 틀리면 400 USER_004. 탈퇴하면 로그인·refresh·기존 토큰이 모두 거절된다 — 서버 재시작으로 복구)
 
   ./setup.sh                     # 샘플 파일 생성 (최초 1회)
   python3 server.py 3999         # 실행
   xcodebuild ... BACKEND_URL=http://localhost:3999 build
 
-테스트 계정: mockuser / mock-pass (서버 재시작 시 기존 액세스 토큰은 만료 처리됨)
+테스트 계정: mockuser / mock-pass (서버 재시작 시 기존 액세스 토큰은 만료 처리됨, 비밀번호도 mock-pass 로 돌아감)
 """
 import json, os, re, sys, uuid
 from email.parser import BytesParser
@@ -54,6 +56,14 @@ TRAVELS = [
                  {"userId": ME, "role": "VIEWER", "nickname": "나"}],
      "created": "2025-12-01T10:00:00"},
 ]
+
+# 내 프로필 (백엔드 UserProfileResponse 형식). 비밀번호 변경·탈퇴는 메모리에만 반영된다
+PROFILE = {"id": "64f0mock", "userId": ME, "email": "mock@example.com", "name": "테스트 사용자", "src": None,
+           "birthday": None, "roles": ["user"], "created": "2026-01-01T09:30:00", "updated": "2026-01-01T09:30:00"}
+ACCOUNT = {"password": "mock-pass", "deleted": False}
+
+def password_mismatch(handler):
+    return handler.send_json(400, {"status": "BAD_REQUEST", "code": "USER_004", "msg": "Current password does not match"})
 
 MEDIA = {}
 def seed():
@@ -145,6 +155,8 @@ class H(BaseHTTPRequestHandler):
     def authed(self):
         auth = self.headers.get("Authorization", "")
         token = auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
+        if ACCOUNT["deleted"]:
+            VALID.clear()
         if token.startswith("access-") and token not in VALID:
             log(f"EXPIRED token {token} -> 401")
             self.send_json(401, {"error": "Unauthorized", "message": "Token expired", "status": 401}); return False
@@ -157,8 +169,10 @@ class H(BaseHTTPRequestHandler):
         if u.path.startswith("/files/"): return self.serve_file(u.path[len("/files/"):])
         if not self.authed(): return
         if u.path == "/api/v1/users/me":
-            return self.send_json(200, {"id": "64f0mock", "userId": ME, "name": "테스트 사용자", "email": "mock@example.com",
-                                        "roles": ["user"], "createdAt": "2026-01-01T00:00:00"})
+            return self.send_json(200, {"id": PROFILE["id"], "userId": ME, "name": PROFILE["name"], "email": PROFILE["email"],
+                                        "profileImage": PROFILE["src"], "roles": ["user"], "createdAt": PROFILE["created"]})
+        if u.path == "/api/v1/user/profile":
+            return self.send_json(200, PROFILE)
         if u.path == "/api/v1/travels/my":
             page, size = int(q.get("page", 0)), int(q.get("size", 10))
             chunk = TRAVELS[page*size:(page+1)*size]
@@ -183,12 +197,14 @@ class H(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0) or 0)
         if u.path == "/ps/login":
             form = parse_qs(self.rfile.read(length).decode())
-            if form.get("username", [""])[0] == "mockuser" and form.get("password", [""])[0].startswith("mock-pass"):
+            if not ACCOUNT["deleted"] and form.get("username", [""])[0] == "mockuser" and form.get("password", [""])[0] == ACCOUNT["password"]:
                 return self.send_json(200, {"accessToken": issue(), "refreshToken": "refresh-1", "grantType": []})
             return self.send_json(401, {"error": "Unauthorized", "message": "Invalid username or password"})
         if u.path == "/login/ps/refresh":
             body = json.loads(self.rfile.read(length) or b"{}")
             log(f"refresh with {body.get('refreshToken')}")
+            if ACCOUNT["deleted"]:
+                return self.send_json(403, {"status": "FORBIDDEN", "code": "USER_006", "msg": "Account has been disabled"})
             return self.send_json(200, {"accessToken": issue(), "refreshToken": "refresh-2"})
         if u.path == "/api/v1/travels":
             if not self.authed(): return
@@ -290,6 +306,21 @@ class H(BaseHTTPRequestHandler):
     def do_PUT(self):
         u = urlparse(self.path)
         length = int(self.headers.get("Content-Length", 0) or 0)
+        if u.path == "/api/v1/user/profile":
+            if not self.authed(): return
+            body = json.loads(self.rfile.read(length) or b"{}")
+            # 백엔드 updateUserProfile 과 같이 null(없는 키)은 그대로 둔다
+            for k in ("name", "email", "src", "birthday"):
+                if body.get(k) is not None: PROFILE[k] = body[k]
+            log(f"PROFILE UPDATE {json.dumps(body, ensure_ascii=False)}")
+            return self.send_json(200, PROFILE)
+        if u.path == "/api/v1/user/password":
+            if not self.authed(): return
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if body.get("currentPassword") != ACCOUNT["password"]: return password_mismatch(self)
+            ACCOUNT["password"] = body.get("newPassword") or ""
+            log("PASSWORD CHANGE")
+            return self.send_json(200, None)
         m = re.match(r"^/api/v1/travels/([^/]+)$", u.path)
         if m:
             if not self.authed(): return
@@ -334,6 +365,14 @@ class H(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self.authed(): return
         path = urlparse(self.path).path
+        if path == "/api/v1/user/account":
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if body.get("password") != ACCOUNT["password"]: return password_mismatch(self)
+            ACCOUNT["deleted"] = True
+            PROFILE.update({"name": "Deleted user", "email": None, "src": None, "birthday": None})
+            log("ACCOUNT DELETE")
+            return self.send_json(200, None)
         m = re.match(r"^/api/v1/travels/([^/]+)/media/uploads/([^/]+)$", path)
         if m:
             up = UPLOADS.pop(m.group(2), None)

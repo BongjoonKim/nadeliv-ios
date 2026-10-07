@@ -9,6 +9,12 @@
 	<!-- 표준 HTTPS 외 암호화 미사용 → 수출 규정 면제. TestFlight 빌드마다 묻는 질문을 생략한다. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- 실행 화면: 첫 화면과 같은 배경색만 깐다 (자동 생성은 흰 화면이라 다크 앱에서 번쩍인다). Theme.Color.bg 와 같은 값 -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -23,9 +23,11 @@ Nadeliv/
     │   └── Upload/   # UploadManager(앱 전역 대기열·디스크 기록), BackgroundUploadSession(S3 PUT), UploadJobStore, HEIC→JPEG·메타데이터
     └── Profile/      # 내 정보·프로필 편집(이름·생일·사진)·비밀번호 변경·로그아웃·계정 삭제 (ProfileAPI)
 Tools/MockBackend/  # UI 검증용 가짜 백엔드 (아래 "검증" 참고)
+Tools/IconRender/   # 앱 아이콘(Nv 겹친 모노그램) 렌더 스크립트 — 아이콘을 고칠 때 여기서 다시 그린다
 ```
 
 - Xcode 프로젝트는 폴더 동기화 그룹을 쓴다. `Nadeliv/` 아래에 파일을 추가하면 자동으로 빌드에 포함된다.
+- 실행 화면은 `Config/Info.plist` 의 `UILaunchScreen` → 색 에셋 `LaunchBackground`(= Theme.Color.bg) 만 깐다. 자동 생성(`UILaunchScreen_Generation`)은 흰 화면이라 쓰지 않는다.
 - `Config/Info.plist` 는 빌드 설정과 병합되는 부분 plist 다. 동기화 폴더 밖에 둬야 리소스로 중복 복사되지 않는다.
 
 ## 규칙

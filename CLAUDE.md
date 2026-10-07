@@ -85,6 +85,23 @@ xcodebuild ... BACKEND_URL=http://localhost:3999 build   # 이 빌드를 시뮬�
 - 시뮬레이터 앱 컨테이너의 업로드 기록: `xcrun simctl get_app_container booted com.nadeliv.app data` → `Library/Application Support/uploads/`.
 - 시뮬레이터 기기 언어가 한국어면 자동 입력이 한글 자모로 들어간다 → 테스트 시뮬레이터 키보드를 en_US 로 설정.
 
+## TestFlight 배포
+
+팀에 등록된 기기가 없어 Automatic 서명 archive 는 "no devices" 로 실패한다 → 서명 없이 archive 하고 export 에서 App Store 배포 서명(클라우드 관리 인증서)을 한다.
+
+```bash
+# 1) project.pbxproj 의 CURRENT_PROJECT_VERSION 을 올린다 (Debug·Release 둘 다). 같은 번호는 업로드 거절.
+xcodebuild -project Nadeliv.xcodeproj -scheme Nadeliv -configuration Release -destination 'generic/platform=iOS' \
+  -archivePath build/Nadeliv.xcarchive CODE_SIGNING_ALLOWED=NO archive
+# 2) ExportOptions: method=app-store-connect, destination=upload, teamID=4VCQ777SL9, signingStyle=automatic
+xcodebuild -exportArchive -archivePath build/Nadeliv.xcarchive -exportPath build/upload \
+  -exportOptionsPlist build/ExportOptions-upload.plist -allowProvisioningUpdates
+```
+
+- 업로드 인증은 Xcode 에 로그인된 Apple ID 를 쓴다. 처리(10~30분) 후 내부 테스팅 그룹에 자동 배포된다.
+- 테스터는 **내부 테스팅** 그룹으로만 추가한다. 외부 그룹·빌드 화면의 "개인 테스터"는 베타 심사(데모 계정 필요)로 넘어간다.
+- Release 빌드는 운영 백엔드(`api.nadeliv.com`)에 붙는다. 실기기 테스트 업로드는 오너 여행 하나에서 하고 지운다.
+
 ## 브랜치
 
 작업은 `develop`. `production` 머지·푸시는 오너만 한다.

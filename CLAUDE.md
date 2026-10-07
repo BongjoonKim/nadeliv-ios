@@ -87,10 +87,22 @@ xcodebuild ... BACKEND_URL=http://localhost:3999 build   # 이 빌드를 시뮬�
 
 ## TestFlight 배포
 
+### 자동 (Xcode Cloud)
+
+`production` 에 머지(push)되면 Xcode Cloud 가 Release archive → TestFlight 업로드 → 내부 테스팅 그룹 배포까지 한다.
+
+- 워크플로우는 Xcode(Report navigator → Cloud)·App Store Connect 에서 관리한다. 저장소에는 shared scheme(`Nadeliv.xcodeproj/xcshareddata/xcschemes/Nadeliv.xcscheme`)만 있다. **이 파일을 지우거나 공유를 끄면 Xcode Cloud 빌드가 깨진다.**
+- 워크플로우 구성: 시작 조건 = Branch Changes `production` / 액션 = Archive(iOS, Release), 배포 준비 = TestFlight(Internal Testing Only) / 후속 = TestFlight Internal Testing 그룹. PR 검사용으로 Pull Request Changes(대상 `production`) → Build 워크플로우를 따로 둔다.
+- **빌드 번호는 Xcode Cloud 가 매긴다** (`CI_BUILD_NUMBER` 로 CFBundleVersion 을 덮어씀). `CURRENT_PROJECT_VERSION` 은 손으로 올리지 않는다. 수동 업로드로 1·2 를 썼으므로 Xcode Cloud 설정의 다음 빌드 번호는 3 이상이어야 한다.
+- 사용자에게 보이는 버전(`MARKETING_VERSION`)은 여전히 develop 에서 직접 올린다.
+- Xcode Cloud 환경의 Xcode 버전은 로컬(현재 27.0)과 맞춘다.
+
+### 수동 (Xcode Cloud 장애 시)
+
 팀에 등록된 기기가 없어 Automatic 서명 archive 는 "no devices" 로 실패한다 → 서명 없이 archive 하고 export 에서 App Store 배포 서명(클라우드 관리 인증서)을 한다.
 
 ```bash
-# 1) project.pbxproj 의 CURRENT_PROJECT_VERSION 을 올린다 (Debug·Release 둘 다). 같은 번호는 업로드 거절.
+# 1) project.pbxproj 의 CURRENT_PROJECT_VERSION 을 Xcode Cloud 가 마지막으로 쓴 번호보다 크게 올린다 (Debug·Release 둘 다). 같은 번호는 업로드 거절.
 xcodebuild -project Nadeliv.xcodeproj -scheme Nadeliv -configuration Release -destination 'generic/platform=iOS' \
   -archivePath build/Nadeliv.xcarchive CODE_SIGNING_ALLOWED=NO archive
 # 2) ExportOptions: method=app-store-connect, destination=upload, teamID=4VCQ777SL9, signingStyle=automatic

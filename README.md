@@ -19,4 +19,4 @@
 ## 브랜치
 
 - `develop`: 모든 작업 브랜치
-- `production`: 운영 배포 브랜치. 오너가 직접 머지한다.
+- `production`: 운영 배포 브랜치. 오너가 직접 머지한다. 머지되면 Xcode Cloud 가 TestFlight(내부 테스팅)에 자동 업로드한다.

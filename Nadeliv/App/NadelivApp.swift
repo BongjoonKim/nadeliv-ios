@@ -30,13 +30,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
-        completionHandler: @escaping @MainActor @Sendable () -> Void
+        completionHandler: @escaping () -> Void
     ) {
+        // 타입을 UIKit 요구사항(@escaping () -> Void)과 정확히 맞춰야 프로토콜 메서드로 인정된다.
+        // @MainActor @Sendable 을 붙이면 "nearly matches" 경고와 함께 시스템이 호출하지 않는다.
         guard identifier == BackgroundUploadSession.identifier else {
             completionHandler()
             return
         }
-        BackgroundUploadSession.shared.setCompletionHandler(completionHandler)
+        let handler: @MainActor @Sendable () -> Void = { completionHandler() }
+        BackgroundUploadSession.shared.setCompletionHandler(handler)
         _ = UploadManager.shared
     }
 }

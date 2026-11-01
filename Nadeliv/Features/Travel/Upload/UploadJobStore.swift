@@ -31,6 +31,8 @@ nonisolated struct UploadJobRecord: Codable, Identifiable {
 
     let id: UUID
     let travelId: String
+    /// 자체 사진 선택기로 고른 경우 사진 보관함 localIdentifier. 완료되면 UploadedAssetRegistry 에 기록한다.
+    var assetId: String?
     var status: Status
     var errorMessage: String?
 

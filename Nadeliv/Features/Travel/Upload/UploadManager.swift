@@ -20,8 +20,14 @@ final class UploadManager {
 
     /// 전송 중인 part 의 보낸 바이트 (jobId → partNumber → bytes)
     private var inflight: [UUID: [Int: Int64]] = [:]
-    /// 아직 파일로 만들지 않은 사진 선택기 항목 (메모리에만 있음)
-    private var pickerItems: [UUID: PhotosPickerItem] = [:]
+    /// 아직 파일로 만들지 않은 선택 항목 (메모리에만 있음)
+    private var pickerItems: [UUID: Source] = [:]
+
+    /// 올릴 항목의 출처: 시스템 PhotosPicker 항목 또는 자체 선택기가 고른 사진 보관함 항목(localIdentifier)
+    private enum Source {
+        case picker(PhotosPickerItem)
+        case asset(String)
+    }
     /// 지금 URLSession 에 들어가 있는 part ("jobId|partNumber")
     private var liveTasks: Set<String> = []
     private var completing: [UUID: Task<Void, Never>] = [:]
@@ -61,11 +67,31 @@ final class UploadManager {
         if jobs.allSatisfy(\.isFinished) { clearFinished() }
         for item in items {
             let job = Job(travelId: travelId)
-            pickerItems[job.id] = item
+            pickerItems[job.id] = .picker(item)
             jobs.append(job)
         }
         persist()
         startPreparerIfNeeded()
+    }
+
+    /// 자체 사진 선택기(PhotoPickerView)가 고른 사진 보관함 항목을 대기열에 넣는다.
+    func enqueue(assetIds: [String], travelId: String, api: APIClient) {
+        guard !assetIds.isEmpty else { return }
+        self.api = api
+        if jobs.allSatisfy(\.isFinished) { clearFinished() }
+        for assetId in assetIds {
+            var job = Job(travelId: travelId)
+            job.assetId = assetId
+            pickerItems[job.id] = .asset(assetId)
+            jobs.append(job)
+        }
+        persist()
+        startPreparerIfNeeded()
+    }
+
+    /// 아직 끝나지 않은(올리는 중·대기) 사진 보관함 항목. 선택기가 "올리는 중" 표시에 쓴다.
+    func activeAssetIds(for travelId: String) -> Set<String> {
+        Set(jobs.compactMap { $0.travelId == travelId && !$0.isFinished ? $0.assetId : nil })
     }
 
     func retryFailed(api: APIClient) {
@@ -150,16 +176,23 @@ final class UploadManager {
     }
 
     private func prepare(_ id: UUID) async {
-        guard let item = pickerItems[id], let api else { return }
+        guard let source = pickerItems[id], let api else { return }
         update(id) { $0.status = .preparing }
 
         var tempFile: URL?
         do {
-            guard let picked = try await item.loadTransferable(type: PickedFile.self) else {
-                throw UploadError.unreadable
+            let pickedURL: URL
+            switch source {
+            case .picker(let item):
+                guard let picked = try await item.loadTransferable(type: PickedFile.self) else {
+                    throw UploadError.unreadable
+                }
+                pickedURL = picked.url
+            case .asset(let assetId):
+                pickedURL = try await PhotoLibraryExport.export(localIdentifier: assetId)
             }
-            tempFile = picked.url
-            let prepared = try await UploadPreparer.prepare(picked.url)
+            tempFile = pickedURL
+            let prepared = try await UploadPreparer.prepare(pickedURL)
             tempFile = prepared.fileURL
             let source = try UploadJobStore.adopt(prepared.fileURL, job: id)
             tempFile = nil
@@ -349,6 +382,9 @@ final class UploadManager {
                     $0.mediaId = media.id
                 }
                 uploaded[job.travelId, default: []].append(media)
+                if let assetId = job.assetId {
+                    UploadedAssetRegistry.shared.record(assetId: assetId, mediaId: media.id, travelId: job.travelId)
+                }
                 UploadJobStore.removeFiles(id)
             } catch {
                 // part 는 다 올라가 있으니 "다시 시도" 에서 complete 만 다시 부른다

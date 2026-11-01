@@ -15,6 +15,9 @@
 		<key>UIColorName</key>
 		<string>LaunchBackground</string>
 	</dict>
+	<!-- 제한된 사진 접근일 때 앱 실행마다 뜨는 "더 선택" 시스템 안내를 끈다. 선택기 안에서 직접 "더 선택" 버튼을 둔다 -->
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

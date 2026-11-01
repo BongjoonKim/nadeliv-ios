@@ -19,8 +19,9 @@ Nadeliv/
     │   ├── List/     # 내 여행 목록(+ 로 만들기), 커버(TravelThumb — 웹과 같은 id 해시 색)
     │   ├── Form/     # 여행 만들기·설정(수정·삭제) 시트 (TravelFormModel/View), 커버 사진 1600px JPEG
     │   ├── Album/    # 앨범 그리드·필터·정렬·선택·삭제 (AlbumModel)
+    │   ├── Picker/   # 자체 사진 선택기 (PhotoKit 그리드, "이미 올린 사진" 초록 테두리·체크 표시)
     │   ├── Viewer/   # 전체 화면 뷰어(display → 원본 순, 영상 스트리밍), 사진 앱 저장
-    │   └── Upload/   # UploadManager(앱 전역 대기열·디스크 기록), BackgroundUploadSession(S3 PUT), UploadJobStore, HEIC→JPEG·메타데이터
+    │   └── Upload/   # UploadManager(앱 전역 대기열·디스크 기록), BackgroundUploadSession(S3 PUT), UploadJobStore, HEIC→JPEG·메타데이터, UploadedAssetRegistry(올린 사진 ID 기록), PhotoLibraryExport(PHAsset→파일)
     └── Profile/      # 내 정보·프로필 편집(이름·생일·사진)·비밀번호 변경·로그아웃·계정 삭제 (ProfileAPI)
 Tools/MockBackend/  # UI 검증용 가짜 백엔드 (아래 "검증" 참고)
 Tools/IconRender/   # 앱 아이콘(Nv 겹친 모노그램) 렌더 스크립트 — 아이콘을 고칠 때 여기서 다시 그린다
@@ -46,6 +47,11 @@ Tools/IconRender/   # 앱 아이콘(Nv 겹친 모노그램) 렌더 스크립트 
   - part PUT 이 403 이면 URL 만료 → 300ms 동안 모아 `/parts` 로 재발급 후 그 part 만 다시 올린다. 그 외 실패는 같은 URL 로 최대 3회 재시도. complete 실패는 "다시 시도" 에서 complete 만 다시 부른다.
   - SINGLE PUT 만 `Content-Type` 을 보낸다 (서명에 포함). 멀티파트 part 는 URLSession 기본값(octet-stream)이 붙지만 서명 대상이 아니라 무방하다.
   - HEIC 는 여전히 앱에서 JPEG 으로 바꿔 올린다 (웹은 HEIC 원본 그대로 올리고 Lambda 가 display JPEG 를 만든다).
+- **사진 선택기(앨범 + 버튼)**: 시스템 PhotosPicker 가 아니라 자체 `PhotoPickerView`(PhotoKit) 를 쓴다. 카카오톡처럼 **이미 올린 사진에 초록 테두리+체크**를 표시해 100장을 나눠 올릴 때 어디까지 올렸는지 보이게 한다 ("올린 사진 숨기기" 토글, "마지막 올린 사진" 이동 버튼, 올린 사진을 다시 고르면 "빼고 올리기" 확인창).
+  - 올린 사진 판정 = ① 이 기기 기록(`UploadedAssetRegistry`, `Application Support/uploads/uploaded-assets.json`, 여행별 localIdentifier→mediaId. complete 성공 시 기록, 앨범에서 삭제하면 제거) + ② 서버 앨범 미디어와 **촬영 시각+가로세로 크기** 대조(다른 기기·웹에서 올린 사진용. 서버 takenAt 은 시간대 없는 로컬 시각이라 -12h…+14h 15분 단위 오프셋 중 하나로 맞으면 같은 사진. 같은 초에 찍힌 같은 크기의 연사는 구분 못 함). 선택기를 열 때 미디어 목록을 200개씩 전부 읽는다.
+  - 권한: `NSPhotoLibraryUsageDescription`(전체 접근, pbxproj INFOPLIST_KEY). 거부되면 "시스템 선택기로 고르기" 로 기존 `.photosPicker` 경로(표시 없음)로 넘긴다. 제한된 접근이면 선택기 안의 "더 선택" 으로 `presentLimitedLibraryPicker`; 자동 시스템 안내는 `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` 로 끈다.
+  - 선택한 PHAsset 은 `PhotoLibraryExport` 가 원본(편집본 우선, iCloud 허용)을 임시 파일로 꺼내 기존 UploadPreparer 경로를 그대로 탄다. `UploadJobRecord.assetId` 에 localIdentifier 가 남는다.
+  - 시뮬레이터에서 새 빌드를 띄울 때 `simctl launch` 는 재설치를 안 한다 → `simctl install booted <.app>` 또는 iOS Simulator 도구의 launch 를 쓴다.
 - **여행 만들기·설정**: 만들기 = `POST /api/v1/travels`(만든 사람이 ADMIN). 설정(수정·삭제) = ADMIN 만 (앨범 화면 톱니바퀴, 서버도 검사).
   - 수정은 `PUT` 에 **바꾼 필드만** 보낸다. 서버는 null 을 "변경 없음"으로 봐서 지우려면 빈 문자열·빈 배열을 보낸다 (커버 빼기 = `coverImageUrl: ""`). **날짜는 지울 수 없다** → 이미 날짜가 있으면 토글을 막는다.
   - 커버 사진은 긴 변 1600px JPEG 로 줄여 `POST /api/v1/files`(multipart, fileKey `travel/{id}/cover-{uuid}.jpg`)로 올리고 받은 URL 을 PUT. 고른 즉시가 아니라 저장할 때 올린다. 만들기는 여행을 만든 뒤 그 id 로 올린다 (커버만 실패하면 여행은 남기고 경고).

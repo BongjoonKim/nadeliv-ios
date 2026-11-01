@@ -159,6 +159,7 @@ final class AlbumModel {
     private func remove(id: String) {
         guard let index = items.firstIndex(where: { $0.id == id }) else { return }
         let removed = items.remove(at: index)
+        UploadedAssetRegistry.shared.remove(mediaId: id, travelId: travel.id)
         counts[.all] = max(0, (counts[.all] ?? 1) - 1)
         let kind: MediaFilter = removed.isVideo ? .video : .image
         counts[kind] = max(0, (counts[kind] ?? 1) - 1)

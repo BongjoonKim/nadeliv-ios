@@ -23,6 +23,11 @@ private struct AlbumContent: View {
     @Environment(UploadManager.self) private var uploader
     @State private var model: AlbumModel
 
+    /// 자체 사진 선택기(PhotoPickerView) 표시
+    @State private var isPickingPhotos = false
+    /// 사진 권한이 없어 시스템 선택기로 넘어갈 때 (자체 선택기 시트가 닫힌 뒤 띄운다)
+    @State private var pendingSystemPicker = false
+    @State private var showSystemPicker = false
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var viewerStart: TravelMedia?
     @State private var confirmDelete = false
@@ -70,6 +75,26 @@ private struct AlbumContent: View {
         .task { if model.items.isEmpty { await model.reload(api: auth.api) } }
         .onChange(of: model.filter) { Task { await model.reload(api: auth.api) } }
         .onChange(of: model.sort) { Task { await model.reload(api: auth.api) } }
+        .sheet(isPresented: $isPickingPhotos, onDismiss: {
+            if pendingSystemPicker {
+                pendingSystemPicker = false
+                showSystemPicker = true
+            }
+        }) {
+            PhotoPickerView(
+                travelId: travelId,
+                onPick: { ids in uploader.enqueue(assetIds: ids, travelId: travelId, api: auth.api) },
+                onUseSystemPicker: { pendingSystemPicker = true }
+            )
+        }
+        // 사진 권한을 거부한 경우의 대체 경로: 시스템 선택기 (올린 사진 표시는 못 한다)
+        .photosPicker(
+            isPresented: $showSystemPicker,
+            selection: $pickerItems,
+            maxSelectionCount: 100,
+            matching: .any(of: [.images, .videos]),
+            preferredItemEncoding: .current
+        )
         .onChange(of: pickerItems) {
             guard !pickerItems.isEmpty else { return }
             uploader.enqueue(pickerItems, travelId: travelId, api: auth.api)
@@ -264,15 +289,9 @@ private struct AlbumContent: View {
             }
             if model.canEdit {
                 ToolbarItem(placement: .topBarTrailing) {
-                    PhotosPicker(
-                        selection: $pickerItems,
-                        maxSelectionCount: 100,
-                        matching: .any(of: [.images, .videos]),
-                        preferredItemEncoding: .current
-                    ) {
-                        Image(systemName: "plus")
-                    }
-                    .accessibilityLabel("사진·영상 올리기")
+                    Button { isPickingPhotos = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("사진·영상 올리기")
+                        .accessibilityIdentifier("album.addMedia")
                 }
             }
         }
